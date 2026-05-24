@@ -1,37 +1,35 @@
 // ============================================================
-// Logger.h  —  dual Serial + LittleFS file logger
+// Logger.h  —  dual stdout + file logger (RPi5)
 // ============================================================
+//
+// Drop-in replacement for the ESP32 version.
+// LittleFS → POSIX FILE* at LOG_PATH.
+// Serial    → printf() / stdout.
+// millis()  → std::chrono via arduino_compat.h.
 //
 // Usage:
-//   logger.println("msg");          // char* or F() macro
-//   logger.println(someString);     // String
+//   logger.println("msg");          // const char* or std::string
 //   logger.printf("val=%d", n);     // formatted
+//   logger.getContent()             // returns log file as std::string
+//   logger.clear()                  // delete and reopen log file
 //
-//   logger.getContent()             // flush, read, reopen — safe while enabled
-//   logger.clear()                  // delete log and reopen if enabled
-//
-// File: /log.txt on LittleFS.  Capped at MAX_BYTES; clears on overflow.
-// File handle stays open between writes — only closed for read or clear.
-// Serial: raw message (no timestamp).
-// File:   [<ms>ms] message.
+// File capped at MAX_BYTES; cleared on overflow.
 // ============================================================
 #pragma once
-#include <Arduino.h>
-#include <LittleFS.h>
-#include <stdarg.h>
+#include <cstdarg>
+#include <cstdio>
+#include <cstring>
+#include <string>
+#include "arduino_compat.h"
 
 class Logger {
 public:
     static constexpr size_t      MAX_BYTES = 8192;
-    static constexpr const char* PATH      = "/log.txt";
+    static constexpr const char* PATH      = "/tmp/doggycart.log";
 
     bool begin() {
-        if (!LittleFS.begin(true)) {
-            Serial.println(F("[Logger] LittleFS mount failed"));
-            return false;
-        }
         ready_ = true;
-        Serial.println("[Logger] started (file logging disabled until Start Log)");
+        printf("[Logger] started (file logging disabled until Start Log)\n");
         return true;
     }
 
@@ -43,9 +41,8 @@ public:
 
     bool isEnabled() const { return enabled_; }
 
-    void println(const char* msg)                { write_(msg); }
-    void println(const String& msg)              { write_(msg.c_str()); }
-    void println(const __FlashStringHelper* msg) { String s(msg); write_(s.c_str()); }
+    void println(const char* msg)        { write_(msg); }
+    void println(const std::string& msg) { write_(msg.c_str()); }
 
     void printf(const char* fmt, ...) {
         char buf[256];
@@ -56,64 +53,72 @@ public:
         write_(buf);
     }
 
-    // Flush and close the write handle, read the file, then reopen for appending.
-    String getContent() {
-        if (!ready_) return F("(logger not ready)");
+    std::string getContent() {
+        if (!ready_) return "(logger not ready)";
         if (file_) {
-            file_.flush();
-            file_.close();
+            fflush(file_);
+            fclose(file_);
+            file_ = nullptr;
         }
-        File f = LittleFS.open(PATH, "r");
-        String s = f ? f.readString() : String(F("(empty)"));
-        if (f) f.close();
+        FILE* f = fopen(PATH, "r");
+        std::string s;
+        if (f) {
+            fseek(f, 0, SEEK_END);
+            long sz = ftell(f);
+            fseek(f, 0, SEEK_SET);
+            if (sz > 0) {
+                s.resize(static_cast<size_t>(sz));
+                fread(&s[0], 1, static_cast<size_t>(sz), f);
+            }
+            fclose(f);
+        }
         if (enabled_) openFile_();
-        return s;
+        return s.empty() ? std::string("(empty)") : s;
     }
 
     void clear() {
         if (!ready_) return;
-        if (file_) file_.close();
-        LittleFS.remove(PATH);
+        if (file_) { fclose(file_); file_ = nullptr; }
+        remove(PATH);
         fileSize_ = 0;
-        write_("[Logger] cleared");   // reopens file if enabled; Serial-only otherwise
+        write_("[Logger] cleared");
     }
 
 private:
     bool   ready_    = false;
     bool   enabled_  = false;
-    File   file_;
+    FILE*  file_     = nullptr;
     size_t fileSize_ = 0;
 
     void openFile_() {
-        file_     = LittleFS.open(PATH, "a");
-        fileSize_ = file_ ? (size_t)file_.size() : 0;
+        file_ = fopen(PATH, "a");
+        if (file_) {
+            fseek(file_, 0, SEEK_END);
+            fileSize_ = static_cast<size_t>(ftell(file_));
+        }
     }
 
     void write_(const char* msg) {
-        Serial.println(msg);
+        ::printf("%s\n", msg);
         if (!ready_ || !enabled_) return;
         if (!file_) openFile_();
         if (!file_) return;
 
         if (fileSize_ > MAX_BYTES) {
-            file_.close();
-            LittleFS.remove(PATH);
-            file_     = LittleFS.open(PATH, "w");
+            fclose(file_);
+            remove(PATH);
+            file_     = fopen(PATH, "w");
             fileSize_ = 0;
             if (!file_) return;
-            const char* ovf = "--- overflow: log cleared ---";
-            file_.println(ovf);
-            file_.flush();
-            fileSize_ = strlen(ovf) + 2;
+            const char* ovf = "--- overflow: log cleared ---\n";
+            fputs(ovf, file_);
+            fflush(file_);
+            fileSize_ = strlen(ovf);
         }
 
-        file_.print('[');
-        file_.print(millis());
-        file_.print(F("ms] "));
-        file_.println(msg);
-        file_.flush();
-        // Overestimate: '[' + 10-digit millis + 'ms] ' + msg + '\r\n'
-        fileSize_ += 17 + strlen(msg);
+        ::fprintf(file_, "[%lums] %s\n", millis(), msg);
+        fflush(file_);
+        fileSize_ += 17 + strlen(msg);   // overestimate, same as original
     }
 };
 

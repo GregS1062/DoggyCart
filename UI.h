@@ -1,8 +1,8 @@
 // ============================================================
-// UI.h  —  Web control panel HTML (ESP32)
+// UI.h  —  Web control panel HTML (RPi5)
 // ============================================================
 #pragma once
-#include <Arduino.h>
+#include "arduino_compat.h"
 
 inline String UI() {
     String html;
@@ -39,9 +39,8 @@ inline String UI() {
         "<td colspan='2'><input type='range' id='speedSlider' min='0' max='100' value='0' step='5' "
         "onchange='onSpeed(this.value)'/></td>"
         "</tr><tr>");
-    html += F("<td><button id='refreshID'    style='background:#E7F527'>Refresh</button></td>"
-        "<td><button id='lightToggleID' style='background:#fa0'>Lights: ON</button></td>"
-        "<td id='statusCell' style='font-size:14px;color:#aaa'>--</td>"
+    html += F("<td><button id='refreshID' style='background:#E7F527'>Refresh</button></td>"
+        "<td colspan='2' id='statusCell' style='font-size:14px;color:#aaa'>--</td>"
         "</tr><tr>");
     html += F("<td><button id='startLogID' style='background:#E7F527'>Start Log</button></td>"
         "<td><button id='viewLogID'  style='background:#E7F527'>View Log</button></td>"
@@ -61,7 +60,6 @@ inline String UI() {
         "const btnForward    =document.getElementById('forwardID');"
         "const btnBackward   =document.getElementById('backwardID');"
         "const btnRefresh    =document.getElementById('refreshID');"
-        "const btnLightToggle=document.getElementById('lightToggleID');"
         "const btnStartLog   =document.getElementById('startLogID');"
         "const btnViewLog    =document.getElementById('viewLogID');"
         "const btnClearLog   =document.getElementById('clearLogID');"
@@ -70,34 +68,17 @@ inline String UI() {
         "const statusCell    =document.getElementById('statusCell');"
         "const logDiv        =document.getElementById('logDiv');"
         "const logPre        =document.getElementById('logPre');"
-        "const YELLOW='#E7F527',GREEN='#0c0',RED='#c00',ORANGE='#fa0';"
+        "const YELLOW='#E7F527',GREEN='#0c0',RED='#c00';"
     );
     html += F(
         "let appState='initial',savedState=null,direction=1;"
-        "let lightsOn=true,lastLightMode='';"
 
         "function api(url){fetch(url).catch(()=>{});}"
-
-        // Auto turn signals: threshold steering values match RULES.md
-        "function updateLights(){"
-            "let mode;"
-            "if(!lightsOn){mode='off';}"
-            "else{"
-                "const s=parseFloat(steerSlider.value);"
-                "if(s<40)mode='left';"
-                "else if(s>60)mode='right';"
-                "else mode='full';"
-            "}"
-            "if(mode!==lastLightMode){lastLightMode=mode;api('/api/lights?mode='+mode);}"
-            "btnLightToggle.textContent=lightsOn?'Lights: ON':'Lights: OFF';"
-            "btnLightToggle.style.backgroundColor=lightsOn?ORANGE:YELLOW;"
-        "}"
 
         "function sendDrive(){"
             "const spd=parseFloat(speedSlider.value)/100*direction;"
             "const str=(parseFloat(steerSlider.value)-50)/50;"
             "api('/api/drive?speed='+spd.toFixed(2)+'&steer='+str.toFixed(2));"
-            "updateLights();"
         "}"
 
         "function onSpeed(v){sendDrive();}"
@@ -114,7 +95,6 @@ inline String UI() {
             "btnBackward.style.backgroundColor=YELLOW;"
             "speedSlider.value=0;steerSlider.value=50;"
             "direction=1;api('/api/drive?speed=0&steer=0');"
-            "updateLights();"
         "}"
 
         "function restoreState(){"
@@ -172,16 +152,11 @@ inline String UI() {
                 "appState='initial';"
             "}else{"
                 "api('/api/estop');"
-                "lightsOn=false;lastLightMode='';updateLights();"
                 "btnEstop.style.backgroundColor='#ff0';"
                 "appState='estopped';"
             "}"
         "});"
 
-        "btnLightToggle.addEventListener('click',()=>{"
-            "lightsOn=!lightsOn;"
-            "updateLights();"
-        "});"
     );
     html += F(
         "btnRefresh.addEventListener('click',syncStatus);"

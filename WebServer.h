@@ -1,122 +1,126 @@
 // ============================================================
-// WebServer.h  —  WiFi HTTP server + API routing (ESP32)
-// Uses ESPAsyncWebServer — request callbacks run on Core 0
-// (same core as the WiFi stack), so loop() is a no-op.
+// WebServer.h  —  HTTP server + API routing (RPi5)
+//
+// Replaces ESPAsyncWebServer + WiFi.softAP with cpp-httplib.
+//
+// Dependency: place httplib.h in this directory.
+//   Download the single-header release from the cpp-httplib project
+//   (search: "cpp-httplib yhirose") or install via:
+//   sudo apt install libcpp-httplib-dev   (if available in your distro)
+//
+// WiFi soft-AP is configured at the OS level, not in application code.
+// On RPi5 with Raspberry Pi OS:
+//   sudo apt install hostapd dnsmasq
+//   Configure /etc/hostapd/hostapd.conf with ssid=DoggyCart, wpa_passphrase=rctank1
+//   Configure /etc/dnsmasq.conf for DHCP on wlan0
+// This server then listens on all interfaces at port 8080;
+// connect via http://192.168.4.1:8080 (or whatever IP hostapd assigns).
 // ============================================================
 #pragma once
-#include <WiFi.h>
-#include <ESPAsyncWebServer.h>
+#include <string>
+#include <thread>
+#include "httplib.h"
+#include "arduino_compat.h"
 #include "Logger.h"
 #include "Controller.h"
 #include "UI.h"
 
 class WebServer {
 public:
-    WebServer(Controller& car, const char* ssid, const char* password)
-        : car_(car), ssid_(ssid), password_(password), server_(8080) {}
+    // ssid / password kept in the signature so main.cpp is unchanged;
+    // they are used only by the OS-level hostapd config, not here.
+    WebServer(Controller& car, const char* /*ssid*/, const char* /*password*/)
+        : car_(car) {}
 
     void begin() {
-        logger.println(F("[WebServer] Starting WiFi AP"));
-        WiFi.softAP(ssid_, password_);
-        logger.printf("[WebServer] AP IP: %s", WiFi.softAPIP().toString().c_str());
+        logger.println("[WebServer] Starting HTTP server");
 
-        server_.on("/", HTTP_GET, [this](AsyncWebServerRequest* req) {
-            req->send(200, "text/html", UI());
+        server_.Get("/", [this](const httplib::Request&, httplib::Response& res) {
+            res.set_content(UI(), "text/html");
         });
-        server_.on("/index.html", HTTP_GET, [this](AsyncWebServerRequest* req) {
-            req->send(200, "text/html", UI());
+        server_.Get("/index.html", [this](const httplib::Request&, httplib::Response& res) {
+            res.set_content(UI(), "text/html");
         });
 
-        server_.on("/api/status", HTTP_GET, [this](AsyncWebServerRequest* req) {
-            String json = "{\"ok\":true,\"emergencyStopped\":";
+        server_.Get("/api/status", [this](const httplib::Request&, httplib::Response& res) {
+            std::string json = "{\"ok\":true,\"emergencyStopped\":";
             json += car_.isEmergencyStopped() ? "true" : "false";
-            json += ",\"lights\":\"";
-            json += car_.lightsModeStr();
-            json += "\"}";
-            req->send(200, "application/json", json);
+            json += "}";
+            res.set_content(json, "application/json");
         });
 
-        server_.on("/api/log", HTTP_GET, [this](AsyncWebServerRequest* req) {
-            req->send(200, "text/plain", logger.getContent());
+        server_.Get("/api/log", [this](const httplib::Request&, httplib::Response& res) {
+            res.set_content(logger.getContent(), "text/plain");
         });
 
-        server_.on("/api/drive", HTTP_GET, [this](AsyncWebServerRequest* req) {
+        server_.Get("/api/drive", [this](const httplib::Request& req, httplib::Response& res) {
             car_.setDrive(qfloat(req, "steer"), qfloat(req, "speed"));
-            req->send(200, "application/json", "{\"ok\":true}");
+            res.set_content("{\"ok\":true}", "application/json");
         });
 
-        server_.on("/api/speed", HTTP_GET, [this](AsyncWebServerRequest* req) {
+        server_.Get("/api/speed", [this](const httplib::Request& req, httplib::Response& res) {
             car_.setSpeed(qfloat(req, "value"));
-            req->send(200, "application/json", "{\"ok\":true}");
+            res.set_content("{\"ok\":true}", "application/json");
         });
 
-        server_.on("/api/steer", HTTP_GET, [this](AsyncWebServerRequest* req) {
+        server_.Get("/api/steer", [this](const httplib::Request& req, httplib::Response& res) {
             car_.setSteering(qfloat(req, "value"));
-            req->send(200, "application/json", "{\"ok\":true}");
+            res.set_content("{\"ok\":true}", "application/json");
         });
 
-        server_.on("/api/pause", HTTP_GET, [this](AsyncWebServerRequest* req) {
+        server_.Get("/api/pause", [this](const httplib::Request&, httplib::Response& res) {
             car_.pause();
-            req->send(200, "application/json", "{\"ok\":true}");
+            res.set_content("{\"ok\":true}", "application/json");
         });
 
-        server_.on("/api/estop", HTTP_GET, [this](AsyncWebServerRequest* req) {
+        server_.Get("/api/estop", [this](const httplib::Request&, httplib::Response& res) {
             car_.emergencyStop();
-            req->send(200, "application/json", "{\"ok\":true}");
+            res.set_content("{\"ok\":true}", "application/json");
         });
 
-        server_.on("/api/start", HTTP_GET, [this](AsyncWebServerRequest* req) {
+        server_.Get("/api/start", [this](const httplib::Request&, httplib::Response& res) {
             car_.restart();
-            req->send(200, "application/json", "{\"ok\":true}");
+            res.set_content("{\"ok\":true}", "application/json");
         });
 
-        server_.on("/api/resume", HTTP_GET, [this](AsyncWebServerRequest* req) {
+        server_.Get("/api/resume", [this](const httplib::Request&, httplib::Response& res) {
             car_.restart();
-            req->send(200, "application/json", "{\"ok\":true}");
+            res.set_content("{\"ok\":true}", "application/json");
         });
 
-        server_.on("/api/startlog", HTTP_GET, [this](AsyncWebServerRequest* req) {
+        server_.Get("/api/startlog", [this](const httplib::Request&, httplib::Response& res) {
             logger.enable();
-            req->send(200, "application/json", "{\"ok\":true}");
+            res.set_content("{\"ok\":true}", "application/json");
         });
 
-        server_.on("/api/clearlog", HTTP_GET, [this](AsyncWebServerRequest* req) {
+        server_.Get("/api/clearlog", [this](const httplib::Request&, httplib::Response& res) {
             logger.clear();
-            req->send(200, "application/json", "{\"ok\":true}");
+            res.set_content("{\"ok\":true}", "application/json");
         });
 
-        server_.on("/api/lights", HTTP_GET, [this](AsyncWebServerRequest* req) {
-            String mode = qstr(req, "mode");
-            if      (mode == "left")  car_.setLightsMode(TurnSignals::Mode::LEFT);
-            else if (mode == "right") car_.setLightsMode(TurnSignals::Mode::RIGHT);
-            else if (mode == "full")  car_.setLightsMode(TurnSignals::Mode::FULL);
-            else                      car_.setLightsMode(TurnSignals::Mode::OFF);
-            req->send(200, "application/json", "{\"ok\":true}");
+        server_.set_error_handler([](const httplib::Request&, httplib::Response& res) {
+            res.set_content("Not found", "text/plain");
         });
 
-        server_.onNotFound([](AsyncWebServerRequest* req) {
-            req->send(404, "text/plain", "Not found");
-        });
+        // Run server in background thread; main thread handles signals.
+        server_thread_ = std::thread([this] { server_.listen("0.0.0.0", 8080); });
+        server_thread_.detach();
 
-        server_.begin();
-        logger.println(F("[WebServer] Listening on port 8080"));
+        logger.println("[WebServer] Listening on port 8080");
     }
 
-    void loop() {}  // AsyncWebServer dispatches requests internally on Core 0
+    void loop() {}  // cpp-httplib handles requests in its own thread pool
+
+    void stop() { server_.stop(); }
 
 private:
-    float qfloat(AsyncWebServerRequest* req, const char* key) {
-        if (!req->hasParam(key)) return 0.0f;
-        return req->getParam(key)->value().toFloat();
+    static float qfloat(const httplib::Request& req, const char* key) {
+        if (!req.has_param(key)) return 0.0f;
+        try { return std::stof(req.get_param_value(key)); }
+        catch (...) { return 0.0f; }
     }
 
-    String qstr(AsyncWebServerRequest* req, const char* key) {
-        if (!req->hasParam(key)) return String();
-        return req->getParam(key)->value();
-    }
-
-    Controller&    car_;
-    const char*    ssid_;
-    const char*    password_;
-    AsyncWebServer server_;
+    Controller&     car_;
+    httplib::Server server_;
+    std::thread     server_thread_;
 };

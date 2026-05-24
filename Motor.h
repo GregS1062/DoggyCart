@@ -1,24 +1,35 @@
 // ============================================================
-// Motor.h  —  ESP32 differential-drive motors (LEDC PWM)
+// Motor.h  —  RPi5 differential-drive motors (lgpio software PWM)
 // ============================================================
 //
-// WIRING (L298N H-bridge) — generic ESP32 (GPIO 6-11 reserved for flash)
-// ===========================================================
-//   Right bank:  ENA=GPIO13  IN1=GPIO18  IN2=GPIO19
-//   Left  bank:  ENB=GPIO21  IN3=GPIO22  IN4=GPIO23
+// WIRING (L298N H-bridge)
+// Each motor bank uses a single 3-pin Dupont connector wired to
+// three consecutive left-column (odd) header pins.
+//
+// Right bank — 3 individual wires (ENA on pin 32 cannot share a connector
+//              with IN1/IN2 on pins 13/15):
+//   physical 32  BCM GPIO 12  →  ENA  (hardware PWM0)
+//   physical 13  BCM GPIO 27  →  IN1
+//   physical 15  BCM GPIO 22  →  IN2
+//
+// Left bank — 3-pin Dupont connector at physical pins 29-31-33:
+//   physical 29  BCM GPIO  5  →  IN3
+//   physical 31  BCM GPIO  6  →  IN4
+//   physical 33  BCM GPIO 13  →  ENB  (hardware PWM1)
 //
 // ============================================================
 
 #pragma once
-#include <Arduino.h>
+#include "arduino_compat.h"
+#include "gpio.h"
 #include "Logger.h"
 
-constexpr uint8_t RIGHT_EN   = 13;   // ENA  — PWM
-constexpr uint8_t RIGHT_IN1  = 18;   // IN1
-constexpr uint8_t RIGHT_IN2  = 19;   // IN2
-constexpr uint8_t LEFT_EN    = 21;   // ENB  — PWM
-constexpr uint8_t LEFT_IN1   = 22;   // IN3
-constexpr uint8_t LEFT_IN2   = 23;   // IN4
+constexpr uint8_t RIGHT_EN   = 12;   // ENA  — hardware PWM0, physical pin 32
+constexpr uint8_t RIGHT_IN1  = 27;   // IN1,              physical pin 13
+constexpr uint8_t RIGHT_IN2  = 22;   // IN2,              physical pin 15
+constexpr uint8_t LEFT_EN    = 13;   // ENB  — PWM (PWM1),physical pin 33
+constexpr uint8_t LEFT_IN1   =  5;   // IN3,              physical pin 29
+constexpr uint8_t LEFT_IN2   =  6;   // IN4,              physical pin 31
 
 struct MotorCommand {
     float left  = 0.0f;

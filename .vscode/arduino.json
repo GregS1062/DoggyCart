@@ -1,7 +1,0 @@
-{
-    "sketch": "DoggyCart.ino",
-    "board": "esp32:esp32:esp32",
-    "port": "/dev/ttyUSB0",
-    "baudRate": 115200,
-    "configuration": "FlashSize=4M,PartitionScheme=default,CPUFreq=240,FlashMode=dio,FlashFreq=40,UploadSpeed=460800,DebugLevel=none,PSRAM=disabled"
-}

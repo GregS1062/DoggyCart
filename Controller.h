@@ -1,23 +1,18 @@
 // ============================================================
-// Controller.h  —  Motor + turn-signal arbitration (ESP32)
+// Controller.h  —  Motor arbitration (RPi5)
 // ============================================================
 #pragma once
 #include "Logger.h"
 #include "Motor.h"
-#include "TurnSignals.h"
 
 class Controller {
 public:
     void begin() {
         motors_.begin();
-        lights_.begin();
         logger.println(F("[Controller] Ready."));
     }
 
-    // Call from loop() — drives turn-signal blink timing
-    void loop() {
-        lights_.loop();
-    }
+    void loop() {}
 
     // ── Motor control ────────────────────────────────────────
 
@@ -40,7 +35,7 @@ public:
         apply();
     }
 
-    // Halts motors but preserves speed/steering/lights state — used by Pause
+    // Halts motors but preserves speed/steering state — used by Pause
     void pause() {
         logger.println(F("[Controller] Paused"));
         motors_.stop();
@@ -52,7 +47,6 @@ public:
         speed_    = 0.0f;
         steering_ = 0.0f;
         motors_.stop();
-        lights_.setMode(TurnSignals::Mode::OFF);
         logger.println(F("[Controller] E-STOP"));
     }
 
@@ -64,25 +58,23 @@ public:
         logger.println(F("[Controller] Restarted."));
     }
 
+    // Call before gpioEnd().
+    void close() {
+        motors_.stop();
+    }
+
     bool  isEmergencyStopped() const { return estopped_; }
     float speed()              const { return speed_; }
     float steering()           const { return steering_; }
     MotorCommand activeCommand() const { return motors_.activeCommand(); }
-
-    // ── Lights control ───────────────────────────────────────
-
-    void setLightsMode(TurnSignals::Mode m) { lights_.setMode(m); }
-    TurnSignals::Mode lightsMode()    const { return lights_.mode(); }
-    const char*       lightsModeStr() const { return lights_.modeName(); }
 
 private:
     void apply() {
         motors_.apply(MotorPair::mix(speed_, steering_));
     }
 
-    MotorPair   motors_;
-    TurnSignals lights_;
-    float       speed_    = 0.0f;
-    float       steering_ = 0.0f;
-    bool        estopped_ = false;
+    MotorPair motors_;
+    float     speed_    = 0.0f;
+    float     steering_ = 0.0f;
+    bool      estopped_ = false;
 };

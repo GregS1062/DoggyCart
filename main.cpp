@@ -1,8 +1,6 @@
 // ============================================================
 // main.cpp  —  DoggyCart entry point (Raspberry Pi 5)
 //
-// Replaces the Arduino setup()/loop() pattern with int main().
-//
 // Run:   sudo ./doggycart
 // (sudo required for lgpio GPIO access)
 //
@@ -15,13 +13,13 @@
 #include <cstdio>
 #include <atomic>
 #include "gpio.h"
-#include "Logger.h"
-#include "Controller.h"
-#include "WebServer.h"
-#include "locate.h"
+#include "logger.h"
+#include "controller.h"
+#include "webServer.h"
+#include "scan.h"
 #include "arduino_compat.h"
 
-// ── Globals defined here; extern'd in gpio.h / Logger.h ─────
+// ── Globals defined here; extern'd in gpio.h / logger.h ─────
 
 int    GPIO_HANDLE = -1;   // lgpio chip handle (see gpio.h)
 Logger logger;             // single instance shared across headers
@@ -29,7 +27,7 @@ Logger logger;             // single instance shared across headers
 // ── WiFi AP credentials (used by hostapd config, not code) ──
 
 static const char SSID[]     = "DoggyCart";
-static const char PASSWORD[] = "rctank1";
+static const char PASSWORD[] = "doggy";
 
 // ── Signal handling ──────────────────────────────────────────
 
@@ -52,10 +50,10 @@ int main() {
     car.begin();
 
     Locate locator;
+    locator.setController(&car);
     locator.begin();
-    locator.startPan();
 
-    WebServer server(car, SSID, PASSWORD);
+    WebServer server(car, locator, SSID, PASSWORD);
     server.begin();
 
     signal(SIGINT,  sigHandler);

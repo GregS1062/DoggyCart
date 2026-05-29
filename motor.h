@@ -1,5 +1,5 @@
 // ============================================================
-// Motor.h  —  RPi5 differential-drive motors (lgpio software PWM)
+// motor.h  —  RPi5 differential-drive motors (lgpio software PWM)
 // ============================================================
 //
 // WIRING (L298N H-bridge)
@@ -22,7 +22,7 @@
 #pragma once
 #include "arduino_compat.h"
 #include "gpio.h"
-#include "Logger.h"
+#include "logger.h"
 
 constexpr uint8_t RIGHT_EN   = 12;   // ENA  — hardware PWM0, physical pin 32
 constexpr uint8_t RIGHT_IN1  = 27;   // IN1,              physical pin 13

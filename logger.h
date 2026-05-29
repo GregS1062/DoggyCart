@@ -1,9 +1,7 @@
 // ============================================================
-// Logger.h  —  dual stdout + file logger (RPi5)
+// logger.h  —  dual stdout + file logger (RPi5)
 // ============================================================
 //
-// Drop-in replacement for the ESP32 version.
-// LittleFS → POSIX FILE* at LOG_PATH.
 // Serial    → printf() / stdout.
 // millis()  → std::chrono via arduino_compat.h.
 //

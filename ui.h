@@ -1,17 +1,17 @@
 // ============================================================
-// UI.h  —  Web control panel HTML (RPi5)
+// ui.h  —  Web control panel HTML (RPi5)
 // ============================================================
 #pragma once
 #include "arduino_compat.h"
 
 inline String UI() {
     String html;
-    html.reserve(5000);
+    html.reserve(6500);
 
     html += F("<!DOCTYPE html><html lang='en'><head>"
         "<meta charset='UTF-8'>"
         "<meta name='viewport' content='width=device-width,initial-scale=1'>"
-        "<title>RC Tank</title><style>"
+        "<title>DoggyCart</title><style>"
         "body{font-family:Arial,sans-serif;background:#111;color:#fff;padding:10px;text-align:left;}"
         "table{width:100%;border-collapse:collapse;}"
         "table,th,td{border:1px solid #fff;text-align:center;padding:10px;}"
@@ -21,11 +21,11 @@ inline String UI() {
         "</style></head><body>");
 
     html += F("<table><tr>"
-        "<td colspan='3' style='color:#0c0;font-weight:bold'>RC Tank Controller</td>"
+        "<td colspan='3' style='color:#0c0;font-weight:bold'>DoggyCart Controller</td>"
         "</tr><tr>");
-    html += F("<td><button id='startID' style='background:#E7F527'>Start</button></td>"
-        "<td><button id='pauseID' style='background:#E7F527'>Pause</button></td>"
-        "<td><button id='estopID' style='background:#c00;color:#fff'>E-STOP</button></td>"
+    html += F("<td><button id='startID'   style='background:#E7F527'>Start</button></td>"
+        "<td><button id='pauseID'   style='background:#E7F527'>Pause</button></td>"
+        "<td><button id='estopID'   style='background:#c00;color:#fff'>E-STOP</button></td>"
         "</tr><tr>");
     html += F("<td>Steering</td>"
         "<td colspan='2'><input type='range' id='steerSlider' min='0' max='100' value='50' step='5' "
@@ -39,13 +39,18 @@ inline String UI() {
         "<td colspan='2'><input type='range' id='speedSlider' min='0' max='100' value='0' step='5' "
         "onchange='onSpeed(this.value)'/></td>"
         "</tr><tr>");
-    html += F("<td><button id='refreshID' style='background:#E7F527'>Refresh</button></td>"
-        "<td colspan='2' id='statusCell' style='font-size:14px;color:#aaa'>--</td>"
+    html += F("<td><button id='trackID'   style='background:#E7F527'>Track</button></td>"
+        "<td><button id='photoID'   style='background:#E7F527'>Photo</button></td>"
+        "<td><button id='refreshID' style='background:#E7F527'>Refresh</button></td>"
         "</tr><tr>");
     html += F("<td><button id='startLogID' style='background:#E7F527'>Start Log</button></td>"
         "<td><button id='viewLogID'  style='background:#E7F527'>View Log</button></td>"
         "<td><button id='clearLogID' style='background:#E7F527'>Clear Log</button></td>"
         "</tr></table>");
+    html += F("<div id='statusCell' style='margin:4px 0;font-size:13px;color:#aaa;text-align:right;'>--</div>");
+    html += F("<div id='photoDiv' style='display:none;margin-top:8px;background:#1a1a1a;"
+        "border:1px solid #555;padding:8px;overflow-x:auto;'>"
+        "<div id='photoRow' style='display:flex;flex-wrap:wrap;gap:4px;'></div></div>");
     html += F("<div id='logDiv' style='display:none;margin-top:8px;background:#1a1a1a;"
         "border:1px solid #555;padding:8px;max-height:250px;overflow-y:auto;'>"
         "<pre id='logPre' style='color:#0f0;font-size:12px;margin:0;"
@@ -54,24 +59,28 @@ inline String UI() {
     // ── JavaScript ────────────────────────────────────────────
     html += F("<script>");
     html += F(
-        "const btnStart      =document.getElementById('startID');"
-        "const btnPause      =document.getElementById('pauseID');"
-        "const btnEstop      =document.getElementById('estopID');"
-        "const btnForward    =document.getElementById('forwardID');"
-        "const btnBackward   =document.getElementById('backwardID');"
-        "const btnRefresh    =document.getElementById('refreshID');"
-        "const btnStartLog   =document.getElementById('startLogID');"
-        "const btnViewLog    =document.getElementById('viewLogID');"
-        "const btnClearLog   =document.getElementById('clearLogID');"
-        "const steerSlider   =document.getElementById('steerSlider');"
-        "const speedSlider   =document.getElementById('speedSlider');"
-        "const statusCell    =document.getElementById('statusCell');"
-        "const logDiv        =document.getElementById('logDiv');"
-        "const logPre        =document.getElementById('logPre');"
+        "const btnStart    =document.getElementById('startID');"
+        "const btnPause    =document.getElementById('pauseID');"
+        "const btnEstop    =document.getElementById('estopID');"
+        "const btnTrack    =document.getElementById('trackID');"
+        "const btnPhoto    =document.getElementById('photoID');"
+        "const btnForward  =document.getElementById('forwardID');"
+        "const btnBackward =document.getElementById('backwardID');"
+        "const btnRefresh  =document.getElementById('refreshID');"
+        "const btnStartLog =document.getElementById('startLogID');"
+        "const btnViewLog  =document.getElementById('viewLogID');"
+        "const btnClearLog =document.getElementById('clearLogID');"
+        "const steerSlider =document.getElementById('steerSlider');"
+        "const speedSlider =document.getElementById('speedSlider');"
+        "const statusCell  =document.getElementById('statusCell');"
+        "const photoDiv    =document.getElementById('photoDiv');"
+        "const photoRow    =document.getElementById('photoRow');"
+        "const logDiv      =document.getElementById('logDiv');"
+        "const logPre      =document.getElementById('logPre');"
         "const YELLOW='#E7F527',GREEN='#0c0',RED='#c00';"
     );
     html += F(
-        "let appState='initial',savedState=null,direction=1;"
+        "let appState='initial',savedState=null,direction=1,tracking=false;"
 
         "function api(url){fetch(url).catch(()=>{});}"
 
@@ -81,8 +90,8 @@ inline String UI() {
             "api('/api/drive?speed='+spd.toFixed(2)+'&steer='+str.toFixed(2));"
         "}"
 
-        "function onSpeed(v){sendDrive();}"
-        "function onSteer(v){sendDrive();}"
+        "function onSpeed(v){if(!tracking)sendDrive();}"
+        "function onSteer(v){if(!tracking)sendDrive();}"
     );
     html += F(
         "function saveState(){"
@@ -153,10 +162,53 @@ inline String UI() {
             "}else{"
                 "api('/api/estop');"
                 "btnEstop.style.backgroundColor='#ff0';"
+                "if(tracking){"
+                    "tracking=false;"
+                    "btnTrack.style.backgroundColor=YELLOW;"
+                    "api('/api/track?on=0');"
+                "}"
                 "appState='estopped';"
             "}"
         "});"
+    );
+    html += F(
+        "btnTrack.addEventListener('click',()=>{"
+            "tracking=!tracking;"
+            "if(tracking){"
+                "api('/api/track?on=1');"
+                "btnTrack.style.backgroundColor=GREEN;"
+            "}else{"
+                "api('/api/track?on=0');"
+                "btnTrack.style.backgroundColor=YELLOW;"
+                "sendDrive();"
+            "}"
+        "});"
 
+        "btnPhoto.addEventListener('click',()=>{"
+            "if(photoDiv.style.display!=='none'){photoDiv.style.display='none';return;}"
+            "fetch('/api/photos')"
+                ".then(r=>r.json())"
+                ".then(d=>{"
+                    "photoRow.innerHTML='';"
+                    "if(d.photos&&d.photos.length>0){"
+                        "d.photos.forEach(url=>{"
+                            "const a=document.createElement('a');"
+                            "a.href=url;a.target='_blank';"
+                            "const img=document.createElement('img');"
+                            "img.src=url;"
+                            "img.style.cssText='width:100px;height:75px;object-fit:cover;margin:2px;';"
+                            "a.appendChild(img);photoRow.appendChild(a);"
+                        "});"
+                    "}else{"
+                        "photoRow.textContent='(no photos)';"
+                    "}"
+                    "photoDiv.style.display='block';"
+                "})"
+                ".catch(()=>{"
+                    "photoRow.textContent='(fetch error)';"
+                    "photoDiv.style.display='block';"
+                "});"
+        "});"
     );
     html += F(
         "btnRefresh.addEventListener('click',syncStatus);"

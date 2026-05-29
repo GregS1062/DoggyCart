@@ -11,7 +11,7 @@
 //   If your kernel uses a different chip number, override with
 //   -DHW_PWM_CHIP='"/sys/class/pwm/pwmchipN"' in the Makefile.
 //
-// WIRING SUMMARY — see Motor.h and locate.h for full details.
+// WIRING SUMMARY — see motor.h and scan.h for full details.
 //   Right motor  individual wires  physical 13, 15, 32  GPIO 27, 22, 12
 //   Left  motor  3-pin Dupont      physical 29, 31, 33  GPIO  5,  6, 13
 //   Pan servo    signal wire       physical 12           GPIO 18

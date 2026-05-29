@@ -1,9 +1,9 @@
 // ============================================================
-// Controller.h  —  Motor arbitration (RPi5)
+// controller.h  —  Motor arbitration (RPi5)
 // ============================================================
 #pragma once
-#include "Logger.h"
-#include "Motor.h"
+#include "logger.h"
+#include "motor.h"
 
 class Controller {
 public:

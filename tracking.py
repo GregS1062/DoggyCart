@@ -32,7 +32,7 @@ jpgsPath = config.get("Tracking", "jpgsPath")
 # Named Pipes
 # ────────────────────────────────────────────────
 #
-# Pipe names are from tracking.py's perspective:
+# Pipe names are from Tracking.py's perspective:
 #   PIPE_CMD   (/tmp/resp_pipe) — C++ writes commands here; we read them.
 #   PIPE_DATA  (/tmp/req_pipe)  — we write coordinates here; C++ reads them.
 #
@@ -69,9 +69,9 @@ def make_fifo(path):
 def connect_pipes():
     """Open both pipes.  Returns (fd_cmd, fd_data) or (None, None) on failure.
 
-    Pipes are created by locate.h before tracking.py is launched.
+    Pipes are created by scan.h before Tracking.py is launched.
     fd_cmd  is opened O_RDONLY | O_NONBLOCK so poll_command() never blocks.
-    fd_data is opened O_WRONLY  (blocking) — locate.h holds the read end.
+    fd_data is opened O_WRONLY  (blocking) — scan.h holds the read end.
     """
     try:
         fd_cmd = os.open(PIPE_CMD, os.O_RDONLY | os.O_NONBLOCK)
@@ -189,7 +189,7 @@ jpg_counter    = 0
 def main():
     global jpg_counter
 
-    log.info("tracking.py service starting — will reconnect indefinitely")
+    log.info("Tracking.py service starting — will reconnect indefinitely")
 
     while True:   # outer reconnect loop — never exits
 

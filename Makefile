@@ -1,14 +1,18 @@
 CXX      = g++
-CXXFLAGS = -std=c++17 -Wall -Wextra -O2
-LIBS     = -llgpio -lpthread
+CXXFLAGS = -std=c++23 -Wall -Wextra -O2
+LIBS     = -llgpio -lpthread -lINIReader
 
-TARGET = doggycart
+TARGET = doggyCart
 SRC    = main.cpp
+HDRS   = $(wildcard *.h)
 
 all: check-deps $(TARGET)
 
-$(TARGET): $(SRC)
+$(TARGET): $(SRC) $(HDRS)
 	$(CXX) $(CXXFLAGS) -o $@ $< $(LIBS)
+
+test: $(TARGET)
+	sudo ./$(TARGET) --test
 
 clean:
 	rm -f $(TARGET)
@@ -40,4 +44,4 @@ install-deps:
 	@echo "Still needed: download httplib.h from the cpp-httplib project"
 	@echo "and place it in this directory."
 
-.PHONY: all clean check-deps install-deps
+.PHONY: all test clean check-deps install-deps

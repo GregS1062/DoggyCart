@@ -5,24 +5,41 @@
 // Hardware PWM:  Linux sysfs  (/sys/class/pwm/)
 //
 // Hardware PWM setup (one-time):
-//   Add to /boot/firmware/config.txt:  dtoverlay=pwm-2chan
+//   Add to /boot/firmware/config.txt:  dtoverlay=pwm-2chan,pin=12,func=4,pin2=13,func2=4
 //   Reboot, then verify:               ls /sys/class/pwm/
-//   Expected:                          pwmchip2  (RPi5 default)
+//   Expected:                          pwmchip0  (confirmed on this RPi5)
 //   If your kernel uses a different chip number, override with
 //   -DHW_PWM_CHIP='"/sys/class/pwm/pwmchipN"' in the Makefile.
 //
 // WIRING SUMMARY — see motor.h and scan.h for full details.
 //   Right motor  individual wires  physical 13, 15, 32  GPIO 27, 22, 12
 //   Left  motor  3-pin Dupont      physical 29, 31, 33  GPIO  5,  6, 13
-//   Pan servo    signal wire       physical 12           GPIO 18
+//   Pan servo    signal wire       physical 3            GPIO  2
 //
 // RPi5 uses /dev/gpiochip4 for the 40-pin header.
 // RPi3/4 use /dev/gpiochip0 — override with -DGPIO_CHIP=0 if needed.
 // ============================================================
 #pragma once
-#include <lgpio.h>
+#include <chrono>
 #include <cstdint>
 #include <cstdio>
+#include <lgpio.h>
+#include <thread>
+
+// ── Time ─────────────────────────────────────────────────────
+
+inline unsigned long millis() {
+    using namespace std::chrono;
+    return static_cast<unsigned long>(
+        duration_cast<milliseconds>(steady_clock::now().time_since_epoch()).count());
+}
+
+inline void delay(unsigned long ms) {
+    std::this_thread::sleep_for(std::chrono::milliseconds(ms));
+}
+
+// F() flash-string macro is a no-op on Linux; string literals live in normal RAM
+#define F(x) (x)
 
 // ── lgpio handle ─────────────────────────────────────────────
 
@@ -70,7 +87,7 @@ inline void digitalWrite(uint8_t pin, int val) {
 // All other pins use lgpio software PWM (lgTxPwm).
 
 #ifndef HW_PWM_CHIP
-#define HW_PWM_CHIP "/sys/class/pwm/pwmchip2"
+#define HW_PWM_CHIP "/sys/class/pwm/pwmchip0"
 #endif
 
 static inline bool hwPwmPin_(uint8_t pin) { return pin == 12 || pin == 13; }

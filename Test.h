@@ -43,7 +43,7 @@ static void testMix() {
             c.left == 0.0f && c.right == 0.0f);
 
     c = MotorPair::mix(0.5f, 0.03f);
-    testLog("steering dead zone gives equal motor speeds",
+    testLog("small steering input drives both motors equally",
             fabs(c.left - c.right) < 0.001f);
 
     c = MotorPair::mix(1.0f, 0.0f);

@@ -17,7 +17,7 @@
 #include <dirent.h>
 #include <sys/stat.h>
 #include "httplib.h"
-#include "arduino_compat.h"
+#include "gpio.h"
 #include "logger.h"
 #include "controller.h"
 #include "scan.h"
@@ -25,10 +25,19 @@
 
 class WebServer {
 public:
+    static constexpr unsigned long CLEANUP_INTERVAL_MS = 2 * 60 * 1000; // 2 minutes
+
     // ssid / password are used only by the OS-level hostapd config, not here.
+    // jpgDir     — must match [Tracking] jpgsPath in config.ini, the same value
+    //              tracking.py writes photos to; otherwise this serves an
+    //              empty/wrong directory while photos pile up elsewhere
+    // maxPhotos  — number of newest photos shown in the UI gallery
+    // maxJpgs    — cap on jpg files kept on disk; oldest are deleted past this
     WebServer(Controller& car, Locate& locator,
-              const char* /*ssid*/, const char* /*password*/)
-        : car_(car), locator_(locator) {}
+              const char* /*ssid*/, const char* /*password*/,
+              std::string jpgDir, int maxPhotos, int maxJpgs)
+        : car_(car), locator_(locator), jpgDir_(std::move(jpgDir)),
+          maxPhotos_(maxPhotos), maxJpgs_(maxJpgs) {}
 
     void begin() {
         logger.println("[WebServer] Starting HTTP server");
@@ -43,6 +52,8 @@ public:
         server_.Get("/api/status", [this](const httplib::Request&, httplib::Response& res) {
             std::string json = "{\"ok\":true,\"emergencyStopped\":";
             json += car_.isEmergencyStopped() ? "true" : "false";
+            json += ",\"loggingEnabled\":";
+            json += logger.isEnabled() ? "true" : "false";
             json += "}";
             res.set_content(json, "application/json");
         });
@@ -73,6 +84,7 @@ public:
 
         server_.Get("/api/estop", [this](const httplib::Request&, httplib::Response& res) {
             car_.emergencyStop();
+            locator_.stopPan();   // server-side backstop, independent of client JS state
             res.set_content("{\"ok\":true}", "application/json");
         });
 
@@ -93,18 +105,18 @@ public:
             res.set_content("{\"ok\":true}", "application/json");
         });
 
-        server_.Get("/api/photos", [](const httplib::Request&, httplib::Response& res) {
+        server_.Get("/api/photos", [this](const httplib::Request&, httplib::Response& res) {
             res.set_content(listPhotos_(), "application/json");
         });
 
-        // Serve individual jpg files from JPG_DIR.
+        // Serve individual jpg files from jpgDir_.
         // Pattern matches /jpg/<filename> with no subdirectories.
-        server_.Get(R"(/jpg/([^/]+))", [](const httplib::Request& req, httplib::Response& res) {
+        server_.Get(R"(/jpg/([^/]+))", [this](const httplib::Request& req, httplib::Response& res) {
             std::string fname = req.matches[1].str();
             if (fname.find("..") != std::string::npos) {
                 res.status = 400; return;
             }
-            std::string path = std::string(JPG_DIR) + fname;
+            std::string path = jpgDir_ + fname;
             FILE* f = fopen(path.c_str(), "rb");
             if (!f) { res.status = 404; res.set_content("not found", "text/plain"); return; }
             fseek(f, 0, SEEK_END);
@@ -136,43 +148,49 @@ public:
         logger.println("[WebServer] Listening on port 8080");
     }
 
-    void loop() {}
+    void loop() {
+        unsigned long now = millis();
+        if (now - lastCleanup_ < CLEANUP_INTERVAL_MS) return;
+        lastCleanup_ = now;
+        cleanupOldJpgs_();
+    }
     void stop() { server_.stop(); }
 
 private:
-    // Must match "jpgsPath" in /etc/DoggyCart/config.ini
-    static constexpr const char* JPG_DIR    = "/home/greg/Projects/DoggyCart/jpg/";
-    static constexpr size_t      MAX_PHOTOS = 20;
-
     static float qfloat(const httplib::Request& req, const char* key) {
         if (!req.has_param(key)) return 0.0f;
         try { return std::stof(req.get_param_value(key)); }
         catch (...) { return 0.0f; }
     }
 
-    static std::string listPhotos_() {
-        std::string json = "{\"photos\":[";
-        DIR* dir = opendir(JPG_DIR);
-        if (!dir) return json + "]}";
+    struct JpgEntry { std::string name; time_t mtime; };
 
-        struct Entry { std::string name; time_t mtime; };
-        std::vector<Entry> entries;
+    std::vector<JpgEntry> listJpgs_() {
+        std::vector<JpgEntry> entries;
+        DIR* dir = opendir(jpgDir_.c_str());
+        if (!dir) return entries;
 
         struct dirent* de;
         while ((de = readdir(dir)) != nullptr) {
             std::string name = de->d_name;
             if (name.size() < 5 || name.substr(name.size() - 4) != ".jpg") continue;
-            std::string path = std::string(JPG_DIR) + name;
+            std::string path = jpgDir_ + name;
             struct stat st;
             if (stat(path.c_str(), &st) == 0)
                 entries.push_back({name, st.st_mtime});
         }
         closedir(dir);
+        return entries;
+    }
+
+    std::string listPhotos_() {
+        std::string json = "{\"photos\":[";
+        std::vector<JpgEntry> entries = listJpgs_();
 
         std::sort(entries.begin(), entries.end(),
-            [](const Entry& a, const Entry& b){ return a.mtime > b.mtime; });
-        if (entries.size() > MAX_PHOTOS)
-            entries.resize(MAX_PHOTOS);
+            [](const JpgEntry& a, const JpgEntry& b){ return a.mtime > b.mtime; });
+        if (entries.size() > (size_t)maxPhotos_)
+            entries.resize(maxPhotos_);
 
         bool first = true;
         for (const auto& e : entries) {
@@ -184,8 +202,29 @@ private:
         return json;
     }
 
+    // Deletes the oldest jpgs in JPG_DIR beyond maxJpgs_, called every
+    // CLEANUP_INTERVAL_MS from loop().
+    void cleanupOldJpgs_() {
+        std::vector<JpgEntry> entries = listJpgs_();
+        if (entries.size() <= (size_t)maxJpgs_) return;
+
+        std::sort(entries.begin(), entries.end(),
+            [](const JpgEntry& a, const JpgEntry& b){ return a.mtime < b.mtime; });
+
+        size_t toDelete = entries.size() - (size_t)maxJpgs_;
+        for (size_t i = 0; i < toDelete; ++i) {
+            std::string path = jpgDir_ + entries[i].name;
+            if (remove(path.c_str()) == 0)
+                logger.println("[WebServer] removed old photo: " + entries[i].name);
+        }
+    }
+
     Controller&     car_;
     Locate&         locator_;
+    std::string     jpgDir_;
+    int             maxPhotos_;
+    int             maxJpgs_;
+    unsigned long   lastCleanup_ = 0;
     httplib::Server server_;
     std::thread     server_thread_;
 };

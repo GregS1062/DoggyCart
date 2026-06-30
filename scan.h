@@ -2,13 +2,15 @@
 // scan.h  —  Servo pan controller + camera IPC (RPi5)
 // ============================================================
 //
-// Launches tracking.py as a subprocess, sweeps a pan servo while
-// waiting for a detected person, then locks and steers the car to follow.
+// tracking.py is launched by main.cpp (via config.ini, in the
+// venv with the YOLO deps), not by this file. scan.h sweeps a
+// pan servo while waiting for a detected person, then locks and
+// steers the car to follow.
 //
 // WIRING
-//   Servo signal  →  BCM GPIO 18  (physical pin 12)
+//   Servo signal  →  BCM GPIO 2  (physical pin 3)
 //   Servo 5 V     →  physical pin  2 or 4
-//   Servo GND     →  physical pin  6
+//   Servo GND     →  physical pin  9
 //
 // STATES
 //   IDLE    : nothing running
@@ -46,12 +48,10 @@
 #include <cstdlib>
 #include <cstring>
 #include <fcntl.h>
-#include <signal.h>
+#include <mutex>
 #include <sys/stat.h>
 #include <sys/types.h>
-#include <sys/wait.h>
 #include <unistd.h>
-#include "arduino_compat.h"
 #include "gpio.h"
 #include "logger.h"
 #include "controller.h"
@@ -60,23 +60,24 @@ class Locate {
 public:
     // ── Tuning constants ─────────────────────────────────────
 
-    static constexpr uint8_t      SERVO_PIN        = 18;    // BCM GPIO 18, physical pin 12
+    static constexpr uint8_t      SERVO_PIN        = 2;    // BCM GPIO 2, physical pin 3
     static constexpr int          PAN_MIN_US       = 1250;  // 45 ° — left scan limit
     static constexpr int          PAN_MAX_US       = 1667;  // 120 ° — right scan limit
     static constexpr int          PAN_CENTER_US    = 1458;  // midpoint (≈ 82.5 °)
-    static constexpr int          PAN_STEP_US      = 15;    // μs per scan step
-    static constexpr int          PAN_STEP_MS      = 20;    // ms between scan steps (~50 steps/s)
+    static constexpr int          PAN_STEP_US      = 27;    // μs per scan step (~4.9°, range is 417 μs / 75°)
+    static constexpr unsigned long SERVO_MOVE_MS   = 1000;  // min ms between any servo move — pan or follow-nudge
     static constexpr float        LOCK_THRESH      = 0.08f; // |offset| < this → person centred
     static constexpr unsigned long LOCK_TIMEOUT_MS = 500;   // ms without signal → resume scan
+    static constexpr unsigned long CONNECT_TIMEOUT_MS = 10000; // ms to wait for tracking.py "hello"
 
     // Following parameters — applied whenever a person is detected
     static constexpr float        FOLLOW_SPEED     = 0.40f; // forward throttle (0–1)
     static constexpr float        FOLLOW_STEER     = 0.75f; // scale offset → steering (0–1)
     static constexpr int          SERVO_FOLLOW_US  = 60;    // max servo nudge per detection (μs)
+    static constexpr float        OFFSET_SMOOTH_A  = 0.3f;  // EMA weight on new sample (lower = smoother, laggier)
 
     static constexpr const char* PIPE_DATA       = "/tmp/doggycart_data";
     static constexpr const char* PIPE_CMD        = "/tmp/doggycart_cmd";
-    static constexpr const char* TRACKING_SCRIPT = "/home/greg/Projects/DoggyCart/tracking.py";
 
     // ── State ────────────────────────────────────────────────
 
@@ -102,32 +103,43 @@ public:
             logger.printf("[Locate] cmd pipe open: %s", strerror(errno));
 
         pos_us_ = PAN_CENTER_US;
-        servoWrite(SERVO_PIN, pos_us_);
+        servoWrite(SERVO_PIN, 0);   // tracking starts off — servo unpowered
 
-        launchTracker_();
-
-        logger.println("[Locate] Ready — scanning until person detected.");
+        connectStart_ = millis();
+        logger.println("[Locate] Ready — idle, servo unpowered. Waiting for tracking.py to connect...");
     }
 
     void startPan() {
+        std::lock_guard<std::mutex> lk(mutex_);
         state_      = State::PANNING;
         following_  = false;
         dir_        = 1;
-        lastStep_   = millis();
+        lastServoMove_ = millis();
+        haveSmoothed_ = false;
+        sendCmd_("SEND");   // tell tracking.py to start sending detections
         logger.println("[Locate] Scanning started.");
     }
 
     void stopPan() {
+        std::lock_guard<std::mutex> lk(mutex_);
         state_     = State::IDLE;
         following_ = false;
+        sendCmd_("WAIT");   // tell tracking.py to stop sending detections
         if (controller_) controller_->pause();
-        servoWrite(SERVO_PIN, pos_us_);
+        servoWrite(SERVO_PIN, 0);   // de-power servo when tracking is off
         logger.println("[Locate] Scanning stopped.");
     }
 
     // Call from the main loop
     void loop() {
+        std::lock_guard<std::mutex> lk(mutex_);
         readPipe_();
+
+        if (!connected_ && !connectFailed_ &&
+            millis() - connectStart_ > CONNECT_TIMEOUT_MS) {
+            connectFailed_ = true;
+            logger.println("[Locate] tracking.py failed to connect — no \"hello\" received.");
+        }
 
         if (state_ == State::IDLE) return;
 
@@ -146,8 +158,7 @@ public:
         // PANNING
         if (!following_) {
             // No person detected: sweep servo slowly back and forth
-            if (millis() - lastStep_ >= (unsigned long)PAN_STEP_MS) {
-                lastStep_ = millis();
+            if (millis() - lastServoMove_ >= SERVO_MOVE_MS) {
                 advancePan_();
             }
         } else {
@@ -162,18 +173,14 @@ public:
     }
 
     void close() {
+        std::lock_guard<std::mutex> lk(mutex_);
         if (fd_data_ >= 0) { ::close(fd_data_); fd_data_ = -1; }
         if (fd_cmd_  >= 0) { ::close(fd_cmd_);  fd_cmd_  = -1; }
         servoWrite(SERVO_PIN, 0);   // 0 = disable PWM; servo holds last position
-        if (tracker_pid_ > 0) {
-            kill(tracker_pid_, SIGTERM);
-            waitpid(tracker_pid_, nullptr, 0);
-            tracker_pid_ = -1;
-        }
     }
 
-    State state()    const { return state_; }
-    int   servoPos() const { return pos_us_; }
+    State state()    const { std::lock_guard<std::mutex> lk(mutex_); return state_; }
+    int   servoPos() const { std::lock_guard<std::mutex> lk(mutex_); return pos_us_; }
 
 private:
     // ── FIFO + subprocess ────────────────────────────────────
@@ -183,25 +190,19 @@ private:
             logger.printf("[Locate] mkfifo %s: %s", path, strerror(errno));
     }
 
-    void launchTracker_() {
-        tracker_pid_ = fork();
-        if (tracker_pid_ == 0) {
-            execl("/usr/bin/python3", "python3", TRACKING_SCRIPT, nullptr);
-            _exit(1);   // execl only returns on error
-        } else if (tracker_pid_ > 0) {
-            logger.printf("[Locate] tracking.py launched (pid %d)", (int)tracker_pid_);
-        } else {
-            logger.printf("[Locate] fork failed: %s", strerror(errno));
-            tracker_pid_ = -1;
-        }
-    }
-
     void sendCmd_(const char* cmd) {
         if (fd_cmd_ < 0) return;
         char buf[16];
         int n = snprintf(buf, sizeof(buf), "%s\n", cmd);
-        if (::write(fd_cmd_, buf, n) < 0 && errno != EAGAIN)
-            logger.printf("[Locate] cmd write (%s): %s", cmd, strerror(errno));
+        for (int attempt = 0; attempt < 3; ++attempt) {
+            if (::write(fd_cmd_, buf, n) >= 0) return;
+            if (errno != EAGAIN && errno != EWOULDBLOCK) {
+                logger.printf("[Locate] cmd write (%s): %s", cmd, strerror(errno));
+                return;
+            }
+            usleep(1000);   // 1 ms back-off before retry
+        }
+        logger.printf("[Locate] cmd write (%s): pipe full after retries", cmd);
     }
 
     // ── Pipe read ────────────────────────────────────────────
@@ -217,11 +218,24 @@ private:
 
         // Handshake: tracking.py signals it finished initialising
         if (strncmp(buf, "hello", 5) == 0) {
-            logger.println("[Locate] tracking.py ready — sending SEND.");
-            sendCmd_("SEND");
-            lastSignal_ = millis();
+            if (!connected_) {
+                connected_ = true;
+                logger.println("[Locate] tracking.py connected.");
+            }
+            if (state_ == State::IDLE) {
+                logger.println("[Locate] tracking.py ready — idle, sending WAIT.");
+                sendCmd_("WAIT");
+            } else {
+                logger.println("[Locate] tracking.py ready — sending SEND.");
+                sendCmd_("SEND");
+                lastSignal_ = millis();
+            }
             return;
         }
+
+        // Ignore stray detections while idle — prevents a buffered/in-flight
+        // message from re-activating PANNING/LOCKED after stopPan().
+        if (state_ == State::IDLE) return;
 
         float offset = strtof(buf, nullptr);
         lastSignal_  = millis();
@@ -238,11 +252,23 @@ private:
                 controller_->setDrive(0.0f, FOLLOW_SPEED);
         } else {
             // Person detected but off-centre:
-            //   1. Nudge servo toward the person (proportional to offset)
+            //   1. Nudge servo toward the person (proportional to a smoothed
+            //      offset — raw per-frame YOLO box noise otherwise makes the
+            //      servo jitter on every detection). Throttled to at most
+            //      one move per SERVO_MOVE_MS, same as the pan sweep — only
+            //      the steering motors react to every detection in real time.
             //   2. Steer the car in that direction while driving forward
-            int nudge = (int)(offset * (float)SERVO_FOLLOW_US);
-            pos_us_   = constrain(pos_us_ + nudge, PAN_MIN_US, PAN_MAX_US);
-            servoWrite(SERVO_PIN, pos_us_);
+            smoothedOffset_ = haveSmoothed_
+                ? OFFSET_SMOOTH_A * offset + (1.0f - OFFSET_SMOOTH_A) * smoothedOffset_
+                : offset;
+            haveSmoothed_ = true;
+
+            if (millis() - lastServoMove_ >= SERVO_MOVE_MS) {
+                int nudge = (int)(smoothedOffset_ * (float)SERVO_FOLLOW_US);
+                pos_us_   = constrain(pos_us_ + nudge, PAN_MIN_US, PAN_MAX_US);
+                servoWrite(SERVO_PIN, pos_us_);
+                lastServoMove_ = millis();
+            }
 
             dir_       = (offset > 0.0f) ? 1 : -1;
             following_ = true;
@@ -261,18 +287,24 @@ private:
         if (pos_us_ >= PAN_MAX_US) { pos_us_ = PAN_MAX_US; dir_ = -1; }
         if (pos_us_ <= PAN_MIN_US) { pos_us_ = PAN_MIN_US; dir_ =  1; }
         servoWrite(SERVO_PIN, pos_us_);
+        lastServoMove_ = millis();
     }
 
     // ── Members ──────────────────────────────────────────────
 
+    mutable std::mutex mutex_;
     Controller*   controller_  = nullptr;
     int           fd_data_     = -1;
     int           fd_cmd_      = -1;
-    pid_t         tracker_pid_ = -1;
     int           pos_us_      = PAN_CENTER_US;
     int           dir_         = 1;
     bool          following_   = false;  // true when a person is actively detected
+    float         smoothedOffset_ = 0.0f; // EMA of offset, used to damp servo nudges
+    bool          haveSmoothed_   = false;
     State         state_       = State::IDLE;
-    unsigned long lastStep_    = 0;
+    unsigned long lastServoMove_ = 0;
     unsigned long lastSignal_  = 0;
+    unsigned long connectStart_  = 0;
+    bool          connected_     = false;
+    bool          connectFailed_ = false;
 };

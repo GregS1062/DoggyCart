@@ -20,16 +20,20 @@
 // ============================================================
 
 #pragma once
-#include "arduino_compat.h"
+#include <algorithm>
+#include <cmath>
 #include "gpio.h"
 #include "logger.h"
 
-constexpr uint8_t RIGHT_EN   = 12;   // ENA  — hardware PWM0, physical pin 32
+template<typename T>
+inline T constrain(T v, T lo, T hi) { return std::clamp(v, lo, hi); }
+
+constexpr uint8_t RIGHT_ENA  = 12;   // ENA  — hardware PWM0, physical pin 32
 constexpr uint8_t RIGHT_IN1  = 27;   // IN1,              physical pin 13
 constexpr uint8_t RIGHT_IN2  = 22;   // IN2,              physical pin 15
-constexpr uint8_t LEFT_EN    = 13;   // ENB  — PWM (PWM1),physical pin 33
-constexpr uint8_t LEFT_IN1   =  5;   // IN3,              physical pin 29
-constexpr uint8_t LEFT_IN2   =  6;   // IN4,              physical pin 31
+constexpr uint8_t LEFT_IN3   =  5;   // IN3,              physical pin 29
+constexpr uint8_t LEFT_IN4   =  6;   // IN4,              physical pin 31
+constexpr uint8_t LEFT_ENB   = 13;   // ENB  — hardware PWM1, physical pin 33
 
 struct MotorCommand {
     float left  = 0.0f;
@@ -91,8 +95,8 @@ private:
 class MotorPair {
 public:
     MotorPair()
-        : right_(RIGHT_EN, RIGHT_IN1, RIGHT_IN2, false)
-        , left_ (LEFT_EN,  LEFT_IN1,  LEFT_IN2,  false)
+        : right_(RIGHT_ENA, RIGHT_IN1, RIGHT_IN2, false)
+        , left_ (LEFT_ENB,  LEFT_IN3,  LEFT_IN4,  false)
     {}
 
     void begin() { right_.begin(); left_.begin(); }
@@ -115,7 +119,8 @@ public:
         speed    = constrain(speed,    -1.0f, 1.0f);
         steering = constrain(steering, -1.0f, 1.0f);
 
-        if (fabs(speed) < 0.10f) return MotorCommand::stopped();
+        if (fabs(speed)    < 0.10f) return MotorCommand::stopped();
+        if (fabs(steering) < 0.05f) steering = 0.0f;
 
         float steer = steering * (1.0f - fabs(speed));
         MotorCommand cmd;

@@ -2,7 +2,9 @@
 // ui.h  —  Web control panel HTML (RPi5)
 // ============================================================
 #pragma once
-#include "arduino_compat.h"
+#include <string>
+using String = std::string;
+#define F(x) (x)
 
 inline String UI() {
     String html;
@@ -221,6 +223,11 @@ inline String UI() {
                 "}else{"
                     "statusCell.textContent='OK';"
                     "statusCell.style.color='#0f0';"
+                "}"
+                "if(d.loggingEnabled){"
+                    "btnStartLog.textContent='Logging';"
+                    "btnStartLog.style.backgroundColor=GREEN;"
+                    "btnStartLog.disabled=true;"
                 "}"
             "}).catch(()=>{"
                 "statusCell.textContent='offline';"

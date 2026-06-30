@@ -3,7 +3,7 @@
 // ============================================================
 //
 // Serial    → printf() / stdout.
-// millis()  → std::chrono via arduino_compat.h.
+// millis()  → std::chrono via gpio.h.
 //
 // Usage:
 //   logger.println("msg");          // const char* or std::string
@@ -17,8 +17,9 @@
 #include <cstdarg>
 #include <cstdio>
 #include <cstring>
+#include <mutex>
 #include <string>
-#include "arduino_compat.h"
+#include "gpio.h"
 
 class Logger {
 public:
@@ -27,20 +28,27 @@ public:
 
     bool begin() {
         ready_ = true;
-        printf("[Logger] started (file logging disabled until Start Log)\n");
+        enable();   // logging on by default
         return true;
     }
 
     void enable() {
+        std::lock_guard<std::mutex> lk(mutex_);
         enabled_ = true;
         openFile_();
-        write_("[Logger] file logging enabled");
+        write_unlocked_("[Logger] file logging enabled");
     }
 
     bool isEnabled() const { return enabled_; }
 
-    void println(const char* msg)        { write_(msg); }
-    void println(const std::string& msg) { write_(msg.c_str()); }
+    void println(const char* msg) {
+        std::lock_guard<std::mutex> lk(mutex_);
+        write_unlocked_(msg);
+    }
+    void println(const std::string& msg) {
+        std::lock_guard<std::mutex> lk(mutex_);
+        write_unlocked_(msg.c_str());
+    }
 
     void printf(const char* fmt, ...) {
         char buf[256];
@@ -48,10 +56,12 @@ public:
         va_start(args, fmt);
         vsnprintf(buf, sizeof(buf), fmt, args);
         va_end(args);
-        write_(buf);
+        std::lock_guard<std::mutex> lk(mutex_);
+        write_unlocked_(buf);
     }
 
     std::string getContent() {
+        std::lock_guard<std::mutex> lk(mutex_);
         if (!ready_) return "(logger not ready)";
         if (file_) {
             fflush(file_);
@@ -75,14 +85,16 @@ public:
     }
 
     void clear() {
+        std::lock_guard<std::mutex> lk(mutex_);
         if (!ready_) return;
         if (file_) { fclose(file_); file_ = nullptr; }
         remove(PATH);
         fileSize_ = 0;
-        write_("[Logger] cleared");
+        write_unlocked_("[Logger] cleared");
     }
 
 private:
+    mutable std::mutex mutex_;
     bool   ready_    = false;
     bool   enabled_  = false;
     FILE*  file_     = nullptr;
@@ -96,7 +108,8 @@ private:
         }
     }
 
-    void write_(const char* msg) {
+    // Caller must hold mutex_.
+    void write_unlocked_(const char* msg) {
         ::printf("%s\n", msg);
         if (!ready_ || !enabled_) return;
         if (!file_) openFile_();

@@ -4,6 +4,7 @@ from ultralytics import YOLO
 import numpy as np
 import os, sys, time
 import errno
+import signal
 from pathlib import Path
 import configparser
 import logging
@@ -16,6 +17,26 @@ os.nice(10)  # lower CPU priority; 0 is default, 19 is lowest
 
 logging.basicConfig(level=logging.INFO)
 log = logging.getLogger("tracker")
+
+# ────────────────────────────────────────────────
+# Shutdown handling
+# ────────────────────────────────────────────────
+#
+# systemd (and the C++ side, on process exit) sends SIGTERM to stop this
+# service. Without a handler the process just keeps reconnecting forever
+# and the camera is never released.
+
+shutdown_requested = False
+
+
+def handle_shutdown(signum, frame):
+    global shutdown_requested
+    log.info("Received signal %d — shutting down", signum)
+    shutdown_requested = True
+
+
+signal.signal(signal.SIGTERM, handle_shutdown)
+signal.signal(signal.SIGINT, handle_shutdown)
 
 # ────────────────────────────────────────────────
 # Configuration
@@ -81,7 +102,7 @@ def connect_pipes():
 
     log.info("Command pipe opened — waiting for C++ to open data pipe...")
     try:
-        fd_data = os.open(PIPE_DATA, os.O_WRONLY)
+        fd_data = os.open(PIPE_DATA, os.O_WRONLY | os.O_NONBLOCK)
     except OSError as e:
         log.error("Cannot open data pipe: %s", e.strerror)
         os.close(fd_cmd)
@@ -125,7 +146,7 @@ def poll_command(fd_cmd):
     return data.decode("utf-8").rstrip("\n")
 
 
-def read_ack(fd_cmd, timeout=2.0):
+def read_ack(fd_cmd, timeout=0.5):
     """Blocking-style read of C++'s ack/command after sending a coordinate.
 
     Polls until data arrives or timeout expires.
@@ -189,9 +210,9 @@ jpg_counter    = 0
 def main():
     global jpg_counter
 
-    log.info("Tracking.py service starting — will reconnect indefinitely")
+    log.info("Tracking.py service starting — will reconnect until shutdown")
 
-    while True:   # outer reconnect loop — never exits
+    while not shutdown_requested:   # outer reconnect loop — runs until shutdown
 
         # ── Connect ───────────────────────────────────────────────
         fd_cmd, fd_data = connect_pipes()
@@ -208,7 +229,7 @@ def main():
         log.info("Connected. State = WAIT — waiting for SEND from C++")
 
         try:
-            while True:   # inner session loop
+            while not shutdown_requested:   # inner session loop
 
                 if state == STATE_WAIT:
                     # ── Waiting for SEND command ───────────────────
@@ -243,12 +264,23 @@ def main():
                 if sleep_time > 0:
                     time.sleep(sleep_time)
 
+                im      = cv2.flip(im, 0)   # flip vertically — top becomes bottom — before YOLO sees it
                 img     = cv2.cvtColor(im, cv2.COLOR_BGR2RGB)
                 results = model.predict(img, verbose=False, classes=person_classes)
 
                 sent_any = False
                 frame_width = im.shape[1]
                 for result in results:
+                    # DEBUG: log the best person-confidence seen this frame,
+                    # even if it's below the accept threshold, so we can tell
+                    # "no person seen" apart from "seen but rejected by
+                    # threshold". Remove once detection is confirmed working.
+                    if len(result.boxes) > 0:
+                        best_conf = max(float(b.conf[0]) for b in result.boxes)
+                        log.info("DEBUG best person conf this frame: %.3f", best_conf)
+                    else:
+                        log.info("DEBUG no person boxes this frame")
+
                     for box in result.boxes:
                         if box.conf[0] <= 0.80:
                             continue
@@ -263,6 +295,17 @@ def main():
                             state = STATE_WAIT
                             break
 
+                        # Save a photo for every accepted detection, whether the
+                        # person is centred (WAIT) or not (ack) — previously this
+                        # only ran on "ack", so no photo was ever taken once the
+                        # car locked onto a centred person.
+                        jpg_counter += 1
+                        if jpgs:
+                            log.info("Photo %d: offset=%.4f", jpg_counter, offset)
+                            img_bgr  = cv2.cvtColor(img, cv2.COLOR_RGB2BGR)
+                            img_path = jpgsPath + str(jpg_counter) + "person.jpg"
+                            cv2.imwrite(img_path, img_bgr)
+
                         # Wait for C++ ack or command
                         response = read_ack(fd_cmd)
                         if response == "WAIT":
@@ -276,12 +319,6 @@ def main():
                         # "ack" → continue sending
 
                         sent_any = True
-                        jpg_counter += 1
-                        if jpgs:
-                            log.info("Photo %d: offset=%.4f", jpg_counter, offset)
-                            img_bgr  = cv2.cvtColor(img, cv2.COLOR_RGB2BGR)
-                            img_path = jpgsPath + str(jpg_counter) + "person.jpg"
-                            cv2.imwrite(img_path, img_bgr)
 
                     if state == STATE_WAIT:
                         break
@@ -290,8 +327,13 @@ def main():
             log.exception("Unexpected error in session loop: %s", e)
 
         close_pipes(fd_cmd, fd_data)
+        if shutdown_requested:
+            break
         log.info("Session ended — reconnecting in 2 s")
         time.sleep(2)
+
+    picam2.stop()
+    log.info("Camera released. Tracking.py exiting.")
 
 
 if __name__ == "__main__":
@@ -299,4 +341,6 @@ if __name__ == "__main__":
         main()
     except KeyboardInterrupt:
         log.info("Interrupted by user.")
+        picam2.stop()
+        log.info("Camera released.")
         sys.exit(130)
